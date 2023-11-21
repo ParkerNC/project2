@@ -13,8 +13,14 @@ class Funk():
         self.intLat = 1
         self.addLat = 0
         self.subLat = 0
-        self.multLat = 0
+        self.mulLat = 0
         self.divLat = 0
+
+        self.reorderBuff = []
+        self.fpAddBuff = []
+        self.fpMulBuff = []
+        self.intsBuff = []
+        self.cycle = 0
 
 
 def parseConfig(file: list, funk: Funk) -> None:
@@ -31,6 +37,13 @@ def parseConfig(file: list, funk: Funk) -> None:
             if "reorder" in file[i+6]:
                 funk.reorder = int(file[i+6].split(": ")[1])
 
+            if (funk.fpAdd + funk.fpMul + funk.effAdd) > 10:
+                print("too many reservation stations")
+                exit(2)
+            if funk.reorder > 10:
+                print("too many entries for the reorder buffer")
+                exit(2)
+
         if "latencies" in line:
             if "fp_add" in file[i+2]:
                 funk.addLat = int(file[i+2].split(": ")[1])
@@ -40,6 +53,20 @@ def parseConfig(file: list, funk: Funk) -> None:
                 funk.mulLat = int(file[i+4].split(": ")[1])
             if "fp_div" in file[i+5]:
                 funk.divLat = int(file[i+5].split(": ")[1])
+
+
+def cycle(instruction: list, funk: Funk) -> str:
+    funk.cycle +=1
+    line = instruction[0]
+
+    if len(funk.reorderBuff >= 5):
+        pass
+
+    """
+    todo: run instructions through each stage of the pipeline, do not worry about any limits or dependencies
+    """
+
+    return line
 
 
 if __name__ == "__main__":
@@ -64,5 +91,20 @@ if __name__ == "__main__":
     print("latencies:")
     print(f"{'fp add: ':>13}{funk.addLat}")
     print(f"{'fp sub: ':>13}{funk.subLat}")
-    print(f"{'fp mul: ':>13}{funk.multLat}")
+    print(f"{'fp mul: ':>13}{funk.mulLat}")
     print(f"{'fp div: ':>13}{funk.divLat}")
+    print("")
+    print("")
+    print(f"{'Pipeline Simulation':^59}")
+    print("-" * 59)
+
+    print(f"{'':^38}{'Memory Writes'}")
+    print(f"{'Instruction':^21} {'Issues':^} {'Executes':^} {'Read':^6} {'Result':^6} {'Commits':^7}")
+    print(f"{'-'*21} {'-'*6} {'-'*8} {'-'*6} {'-'*6} {'-'*7}")
+
+    for instruction in sys.stdin:
+        parse = instruction.split(" ")
+
+        line = cycle(parse)
+
+        print(line)
