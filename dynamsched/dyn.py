@@ -22,6 +22,76 @@ class Funk():
         self.intsBuff = []
         self.cycle = 0
 
+        self.reorderDelays = 0
+
+        self.que = []
+
+    def lat(self, inst: str) -> int:
+        if inst == "fadd.s":
+            return self.addLat
+        elif inst == "fsub.s":
+            return self.subLat
+        elif inst == "fmul.s":
+            return self.mulLat
+        elif inst == "fdiv.s":
+            return self.divLat
+        else:
+            return self.intLat
+
+    def first(self, instruction: str) -> int:
+        issueCycle = funk.cycle +1
+        line = instruction.split(" ")
+        readCycle = ''
+        executeCycle = issueCycle + self.lat(line[0])
+        if 'lw' in line[0]:
+            readCycle = executeCycle+1
+        if 'be' not in line[0] and 'sw' not in line[0]:
+            if readCycle != '':
+                writeCycle = readCycle +1
+            else:
+                writeCycle = executeCycle +1
+
+        if writeCycle != '':
+            commitCycle = writeCycle +1
+        elif readCycle != '':
+            commitCycle = readCycle +1
+        else:
+            commitCycle = executeCycle +1
+        
+
+        executeCycles = f"{issueCycle+1:>3} -{executeCycle:>3}"
+        printLine = f"{instruction.strip():<21} {funk.cycle+1:>6} {executeCycles:>8} {readCycle:>6} {writeCycle:>6} {commitCycle:>7}"
+
+        funk.reorderBuff.append((instruction, issueCycle, executeCycle, readCycle, writeCycle, commitCycle))
+
+        funk.cycle +=1
+
+        return printLine
+
+    def issue(self, line: list, cycle: int) -> int:
+        if len(self.reorderBuff) >= self.reorder:
+            issCycle = self.reorderBuff[0][5]
+            funk.cycle = issCycle
+            self.reorderDelays += issCycle - cycle
+            return issCycle
+        return cycle +1
+    
+    def execute(self, line: list, cycle: int) -> int:
+        latency = funk.lat(line[0])
+        return cycle + latency
+    
+    def read(self, line: list, cycle: int) -> int:
+        return cycle + 1
+    
+    def write(self, line: list, cycle: int) -> int:
+        return cycle + 1
+    
+    def commit(self, line: list, cycle: int) -> int:
+
+        comCycle = cycle + 1
+        if comCycle <= self.reorderBuff[-1][5]:
+            return self.reorderBuff[-1][5] + 1
+        return cycle + 1
 
 def parseConfig(file: list, funk: Funk) -> None:
     for i, line in enumerate(file):
@@ -55,18 +125,43 @@ def parseConfig(file: list, funk: Funk) -> None:
                 funk.divLat = int(file[i+5].split(": ")[1])
 
 
-def cycle(instruction: list, funk: Funk) -> str:
+
+def cycle(funk: Funk, instruction: str) -> str:
+    line = instruction.split(' ')
+
+    if funk.reorderBuff[0][5] <= funk.cycle:
+        funk.reorderBuff.pop(0)
+
+    
+    readCycle = ''
+    writeCycle = ''
+
+    issueCycle = funk.issue(line, funk.cycle)
+    executeCycle = funk.execute(line, issueCycle)
+    if 'lw' in line[0]:
+        readCycle = funk.read(line, executeCycle)
+    if 'be' not in line[0] and 'sw' not in line[0]:
+        if readCycle != '':
+            writeCycle = funk.write(line, readCycle)
+        else:
+            writeCycle = funk.write(line, executeCycle)
+    
+    if writeCycle != '':
+        commitCycle = funk.commit(line, writeCycle)
+    elif readCycle != '':
+        commitCycle = funk.commit(line, readCycle)
+    else:
+        commitCycle = funk.commit(line, executeCycle)
+
+    funk.reorderBuff.append((instruction, issueCycle, executeCycle, readCycle, writeCycle, commitCycle))
+
+    executeCycles = f"{issueCycle+1:>3} -{executeCycle:>3}"
+
+    printLine = f"{instruction.strip():<21} {issueCycle:>6} {executeCycles:>8} {readCycle:>6} {writeCycle:>6} {commitCycle:>7}"
+
     funk.cycle +=1
-    line = instruction[0]
 
-    if len(funk.reorderBuff >= 5):
-        pass
-
-    """
-    todo: run instructions through each stage of the pipeline, do not worry about any limits or dependencies
-    """
-
-    return line
+    return printLine
 
 
 if __name__ == "__main__":
@@ -102,9 +197,19 @@ if __name__ == "__main__":
     print(f"{'Instruction':^21} {'Issues':^} {'Executes':^} {'Read':^6} {'Result':^6} {'Commits':^7}")
     print(f"{'-'*21} {'-'*6} {'-'*8} {'-'*6} {'-'*6} {'-'*7}")
 
-    for instruction in sys.stdin:
-        parse = instruction.split(" ")
 
-        line = cycle(parse)
+    instruction = next(sys.stdin)
+    line = funk.first(instruction)
+    print(line)
+
+    for instruction in sys.stdin:
+
+        line = cycle(funk, instruction)
 
         print(line)
+
+    print("")
+    print("")
+    print("Delays")
+    print("------")
+    print(f"reorder buffer delays: {funk.reorderDelays}")
