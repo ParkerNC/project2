@@ -68,6 +68,16 @@ class Funk():
 
         return printLine
 
+    def buffConflict(self, cycle: int, stage: int) -> int:
+        newCycle = cycle
+        for line in self.reorderBuff:
+            if newCycle == line[stage]:
+                newCycle +=1
+
+                
+        return newCycle
+
+
     def issue(self, line: list, cycle: int) -> int:
         if len(self.reorderBuff) >= self.reorder:
             issCycle = self.reorderBuff[0][5]
@@ -81,13 +91,14 @@ class Funk():
         return cycle + latency
     
     def read(self, line: list, cycle: int) -> int:
-        return cycle + 1
+        readCycle = self.buffConflict(cycle+1, 3)
+        return readCycle
     
     def write(self, line: list, cycle: int) -> int:
-        return cycle + 1
+        writeCycle = self.buffConflict(cycle+1, 4)
+        return writeCycle
     
     def commit(self, line: list, cycle: int) -> int:
-
         comCycle = cycle + 1
         if comCycle <= self.reorderBuff[-1][5]:
             return self.reorderBuff[-1][5] + 1
