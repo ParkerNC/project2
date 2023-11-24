@@ -4,7 +4,7 @@ from time import time
 
 class Funk():
     def __init__(self) -> None:
-        self.effAdd = 10
+        self.effAdd = 0
         self.fpAdd = 0
         self.fpMul = 0
         self.ints = 0
@@ -16,15 +16,11 @@ class Funk():
         self.mulLat = 0
         self.divLat = 0
 
-        self.reorderBuff = []
-        self.fpAddBuff = []
-        self.fpMulBuff = []
-        self.intsBuff = []
         self.cycle = 0
 
         self.reorderDelays = 0
 
-        self.que = []
+        self.reorderBuff = []
 
     def lat(self, inst: str) -> int:
         if inst == "fadd.s":
@@ -37,15 +33,28 @@ class Funk():
             return self.divLat
         else:
             return self.intLat
+        
+    def functionalUnits(self, inst: str) -> int:
+        if inst == "fadd.s":
+            return self.fpAdd
+        elif inst == "fsub.s":
+            return self.fpAdd
+        elif inst == "fmul.s":
+            return self.fpMul
+        elif inst == "fdiv.s":
+            return self.fpMul
+        else:
+            return self.ints
 
     def first(self, instruction: str) -> int:
         issueCycle = funk.cycle +1
         line = instruction.split(" ")
         readCycle = ''
+        writeCycle = ''
         executeCycle = issueCycle + self.lat(line[0])
         if 'lw' in line[0]:
             readCycle = executeCycle+1
-        if 'be' not in line[0] and 'sw' not in line[0]:
+        if 'beq' not in line[0] and 'sw' not in line[0] and "bne" not in line[0]:
             if readCycle != '':
                 writeCycle = readCycle +1
             else:
@@ -62,9 +71,9 @@ class Funk():
         executeCycles = f"{issueCycle+1:>3} -{executeCycle:>3}"
         printLine = f"{instruction.strip():<21} {funk.cycle+1:>6} {executeCycles:>8} {readCycle:>6} {writeCycle:>6} {commitCycle:>7}"
 
-        funk.reorderBuff.append((instruction, issueCycle, executeCycle, readCycle, writeCycle, commitCycle))
+        self.reorderBuff.append((instruction, issueCycle, executeCycle, readCycle, writeCycle, commitCycle))
 
-        funk.cycle +=1
+        self.cycle +=1
 
         return printLine
 
@@ -74,8 +83,61 @@ class Funk():
             if newCycle == line[stage]:
                 newCycle +=1
 
-                
         return newCycle
+    
+    def fuConflict(self, type: str, start: int, end: int):
+        if ".s" in type:
+            pair = ''
+            if "add" in type:
+                pair = "fsub.s"
+            if "sub" in type:
+                pair = "fadd.s"
+            if "mul" in type:
+                pair = "fdiv.s"
+            if "div" in type:
+                pair = "fmul.s"
+            matches = []
+            for line in self.reorderBuff:
+                if type in line[0] or pair in line[0] and start in range(line[2][0], line[2][1]+1):
+                    matches.append(line[2][1])
+
+            if len(matches) >= self.functionalUnits(type):
+                return min(matches)
+            
+        return start
+    
+    def rawCheck(self, readLine: list, writeLine: tuple) -> int:
+        writeInstruction = writeLine[0]
+        writeInstruction = writeInstruction.split(" ")
+        if writeInstruction[0] not in ["beq", "bne", "sw", "fsw"]:
+            readRegisters = readLine[-1].strip()
+            readRegisters = readRegisters.split(',')
+            writeRegister = writeInstruction[-1].strip()
+            writeRegister = writeRegister.split(',')[0]
+            if readLine[0] in ["beq", "bne"]:
+                if writeRegister in readRegisters:
+
+                    return writeLine[4]
+            else:
+                if writeRegister in readRegisters[1:]:
+                    return writeLine[4]
+                
+        return 0
+
+    def dataDependence(self, line: list, cycle: int) -> int:
+        if line[0] not in ["sw", "fsw", "flw", "lw"]:
+            deps = []
+            for prevLine in self.reorderBuff:
+                if prevLine[4] >= cycle:
+                    dep = funk.rawCheck(line, prevLine)
+                    if dep != 0:
+                        deps.append(funk.rawCheck(line, prevLine))
+
+            
+            if len(deps) > 0:
+                return max(deps)
+        
+        return cycle
 
 
     def issue(self, line: list, cycle: int) -> int:
@@ -88,7 +150,10 @@ class Funk():
     
     def execute(self, line: list, cycle: int) -> int:
         latency = funk.lat(line[0])
-        return cycle + latency
+        executeCycle = funk.dataDependence(line, cycle)
+        executeCycle = funk.fuConflict(line[0], executeCycle, latency)
+
+        return executeCycle+1, executeCycle+latency
     
     def read(self, line: list, cycle: int) -> int:
         readCycle = self.buffConflict(cycle+1, 3)
@@ -148,25 +213,25 @@ def cycle(funk: Funk, instruction: str) -> str:
     writeCycle = ''
 
     issueCycle = funk.issue(line, funk.cycle)
-    executeCycle = funk.execute(line, issueCycle)
+    executeCycleStart, executeCycleEnd = funk.execute(line, issueCycle)
     if 'lw' in line[0]:
-        readCycle = funk.read(line, executeCycle)
-    if 'be' not in line[0] and 'sw' not in line[0]:
+        readCycle = funk.read(line, executeCycleEnd)
+    if 'beq' not in line[0] and 'sw' not in line[0] and "bne" not in line[0]:
         if readCycle != '':
             writeCycle = funk.write(line, readCycle)
         else:
-            writeCycle = funk.write(line, executeCycle)
+            writeCycle = funk.write(line, executeCycleEnd)
     
     if writeCycle != '':
         commitCycle = funk.commit(line, writeCycle)
     elif readCycle != '':
         commitCycle = funk.commit(line, readCycle)
     else:
-        commitCycle = funk.commit(line, executeCycle)
+        commitCycle = funk.commit(line, executeCycleEnd)
 
-    funk.reorderBuff.append((instruction, issueCycle, executeCycle, readCycle, writeCycle, commitCycle))
+    funk.reorderBuff.append((instruction, issueCycle, (executeCycleStart, executeCycleEnd), readCycle, writeCycle, commitCycle))
 
-    executeCycles = f"{issueCycle+1:>3} -{executeCycle:>3}"
+    executeCycles = f"{executeCycleStart:>3} -{executeCycleEnd:>3}"
 
     printLine = f"{instruction.strip():<21} {issueCycle:>6} {executeCycles:>8} {readCycle:>6} {writeCycle:>6} {commitCycle:>7}"
 
@@ -195,10 +260,10 @@ if __name__ == "__main__":
     print(f"{'reorder: ':>13}{funk.reorder}")
     print("")
     print("latencies:")
-    print(f"{'fp add: ':>13}{funk.addLat}")
-    print(f"{'fp sub: ':>13}{funk.subLat}")
-    print(f"{'fp mul: ':>13}{funk.mulLat}")
-    print(f"{'fp div: ':>13}{funk.divLat}")
+    print(f"{'fp add: ':>11}{funk.addLat}")
+    print(f"{'fp sub: ':>11}{funk.subLat}")
+    print(f"{'fp mul: ':>11}{funk.mulLat}")
+    print(f"{'fp div: ':>11}{funk.divLat}")
     print("")
     print("")
     print(f"{'Pipeline Simulation':^59}")
