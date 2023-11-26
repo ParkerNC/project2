@@ -1,6 +1,4 @@
-import math
 import sys
-from time import time
 
 class Funk():
     def __init__(self) -> None:
@@ -19,6 +17,9 @@ class Funk():
         self.cycle = 0
 
         self.reorderDelays = 0
+        self.reservationDelays = 0
+        self.memoryDelays = 0
+        self.dependenceDelays = 0
 
         self.reorderBuff = []
 
@@ -43,8 +44,16 @@ class Funk():
             return self.fpMul
         elif inst == "fdiv.s":
             return self.fpMul
-        else:
+        elif inst == "add":
             return self.ints
+        elif inst == "sub":
+            return self.ints
+        elif inst == "beq":
+            return self.ints
+        elif inst == "bne": 
+            return self.ints
+        else:
+            return self.effAdd
 
     def first(self, instruction: str) -> int:
         issueCycle = funk.cycle +1
@@ -71,7 +80,7 @@ class Funk():
         executeCycles = f"{issueCycle+1:>3} -{executeCycle:>3}"
         printLine = f"{instruction.strip():<21} {funk.cycle+1:>6} {executeCycles:>8} {readCycle:>6} {writeCycle:>6} {commitCycle:>7}"
 
-        self.reorderBuff.append((instruction, issueCycle, executeCycle, readCycle, writeCycle, commitCycle))
+        self.reorderBuff.append((instruction, issueCycle, (issueCycle+1, executeCycle), readCycle, writeCycle, commitCycle))
 
         self.cycle +=1
 
@@ -81,82 +90,153 @@ class Funk():
         newCycle = cycle
         for line in self.reorderBuff:
             if newCycle == line[stage]:
-                newCycle +=1
+                newCycle = self.buffConflict(newCycle+1, stage)
 
         return newCycle
     
     def fuConflict(self, type: str, start: int, end: int):
-        if ".s" in type:
-            pair = ''
-            if "add" in type:
-                pair = "fsub.s"
-            if "sub" in type:
-                pair = "fadd.s"
-            if "mul" in type:
-                pair = "fdiv.s"
-            if "div" in type:
-                pair = "fmul.s"
-            matches = []
-            for line in self.reorderBuff:
-                if type in line[0] or pair in line[0] and start in range(line[2][0], line[2][1]+1):
+        pairs = []
+        if type in ["fadd.s", "fsub.s"]:
+            pairs = ["fadd.s", "fsub.s"]
+        elif type in ["fmul.s", "fdiv.s"]:
+            pairs = ["fmul.s", "fdiv.s"]
+        elif type in ["add", "sub", "bne", "beq"]:
+            pairs = ["add", "sub", "bne", "beq"]
+        elif type in ["lw", "sw", "flw", "fsw"]:
+            pairs = ["lw", "sw", "flw", "fsw"]
+
+        matches = []
+        for line in self.reorderBuff:
+            if line[0].split(" ")[0] in pairs and start <= line[2][1]:
+                if line[0].split(" ")[0] in ["lw", "flw"]:
+                    matches.append(line[3])
+                    continue 
+                matches.append(line[2][1])
+            if line[0].split(" ")[0] in pairs and line[0].split(" ")[0] in ["lw", "flw"] and start <= line[3]:
+                matches.append(line[3])
+
+        """
+        for line in self.reorderBuff:
+            if line[0].split(" ")[0] in pairs:
+                if line[0].split(" ")[0] in ["lw", "flw"]:
+                    if start < line[3]:
+                        matches.append(line[3])
+                        continue
+                if start <= line[2][1]:
                     matches.append(line[2][1])
 
-            if len(matches) >= self.functionalUnits(type):
-                return min(matches)
+                if line[0].split(" ")[0] not in ["lw", "flw"]:
+                    if line[4] != '':
+                        if start > line[2][1] and start < line[4]:
+                            matches.append(line[4])
+
+        """
+
+
+        if len(matches) >= self.functionalUnits(type):
+            return min(matches)
             
         return start
     
-    def rawCheck(self, readLine: list, writeLine: tuple) -> int:
+    def rawCheck(self, readLine: list, writeLine: tuple) -> tuple:
         writeInstruction = writeLine[0]
         writeInstruction = writeInstruction.split(" ")
         if writeInstruction[0] not in ["beq", "bne", "sw", "fsw"]:
             readRegisters = readLine[-1].strip()
             readRegisters = readRegisters.split(',')
+            if readLine[0] in ["flw", "lw", "sw", "fsw"]:
+                tmp = readRegisters[-1].split("(")[1]
+                tmp = tmp.split(")")[0]
+                readRegisters[-1] = tmp
+
             writeRegister = writeInstruction[-1].strip()
             writeRegister = writeRegister.split(',')[0]
             if readLine[0] in ["beq", "bne"]:
                 if writeRegister in readRegisters:
 
-                    return writeLine[4]
+                    return (writeLine[4], writeRegister)
             else:
                 if writeRegister in readRegisters[1:]:
-                    return writeLine[4]
+                    return (writeLine[4], writeRegister)
                 
-        return 0
+        return (0, "0")
 
     def dataDependence(self, line: list, cycle: int) -> int:
-        if line[0] not in ["sw", "fsw", "flw", "lw"]:
-            deps = []
-            for prevLine in self.reorderBuff:
-                if prevLine[4] >= cycle:
-                    dep = funk.rawCheck(line, prevLine)
-                    if dep != 0:
-                        deps.append(funk.rawCheck(line, prevLine))
-
+        #if line[0] not in ["sw", "fsw"]:
+        deps = {}
+        for prevLine in self.reorderBuff:
+            if prevLine[4] == '':
+                continue
             
-            if len(deps) > 0:
-                return max(deps)
+            dep = funk.rawCheck(line, prevLine)
+            if dep[0] != 0:
+                deps[dep[1]] = dep[0]
+
+        
+        if len(deps) > 0:
+            big = 0
+            for dep in deps:
+                if big < deps[dep]:
+                    big = deps[dep]
+
+            if big >= cycle:
+                return big
         
         return cycle
 
+    def memoryConflict(self, line: list, cycle: int) -> int:
+        readingLocation = line[-1].split(":")[-1]
+        for prevLine in self.reorderBuff:
+            if prevLine[0].split(" ")[0] in ["sw", "fsw"]:
+                writtenLoction = prevLine[0].split(" ")[-1].split(":")[-1]
+                if readingLocation == writtenLoction and cycle <= prevLine[5]:
+                    return prevLine[5]+1
+                
+        return cycle
+    
+    def memoryBuffConflict(self, cycle: int) -> int:
+        newCycle = cycle
+        for line in self.reorderBuff:
+            if line[0].split(" ")[0] in ["sw", "fsw"] and newCycle == line[5]:
+                newCycle +=1
+
+        return newCycle
+
 
     def issue(self, line: list, cycle: int) -> int:
+        issCycle = cycle
+        latency = funk.lat(line[0])
+        issCycle = funk.fuConflict(line[0], issCycle, latency)
+
+        if issCycle != cycle:
+            self.reservationDelays+=1
+
         if len(self.reorderBuff) >= self.reorder:
-            issCycle = self.reorderBuff[0][5]
-            funk.cycle = issCycle
-            self.reorderDelays += issCycle - cycle
-            return issCycle
-        return cycle +1
+            if issCycle < self.reorderBuff[0][5]:
+                self.reorderDelays +=1
+                issCycle = self.reorderBuff[0][5] -1
+        
+        funk.cycle = issCycle
+
+        return issCycle+1
     
     def execute(self, line: list, cycle: int) -> int:
+        
         latency = funk.lat(line[0])
         executeCycle = funk.dataDependence(line, cycle)
-        executeCycle = funk.fuConflict(line[0], executeCycle, latency)
-
+        if executeCycle != cycle:
+            self.dependenceDelays +=1
+        
         return executeCycle+1, executeCycle+latency
     
     def read(self, line: list, cycle: int) -> int:
-        readCycle = self.buffConflict(cycle+1, 3)
+        readCycle = self.memoryConflict(line, cycle+1)
+        if readCycle != cycle:
+            self.memoryDelays +=1
+        readCycle = self.buffConflict(readCycle, 3)
+        readCycle = self.memoryBuffConflict(readCycle)
+        readCycle = self.buffConflict(readCycle, 3)
+        
         return readCycle
     
     def write(self, line: list, cycle: int) -> int:
@@ -289,3 +369,6 @@ if __name__ == "__main__":
     print("Delays")
     print("------")
     print(f"reorder buffer delays: {funk.reorderDelays}")
+    print(f"reservation station delays: {funk.reservationDelays}")
+    print(f"data memory conflict delays: {funk.memoryDelays}")
+    print(f"true dependence delays: {funk.dependenceDelays}")

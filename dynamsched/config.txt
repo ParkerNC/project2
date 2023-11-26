@@ -1,9 +1,9 @@
 buffers
 
-eff addr: 2
-fp adds: 2
-fp muls: 2
-ints: 2
+eff addr: 4
+fp adds: 3
+fp muls: 1
+ints: 1
 reorder: 5
 
 latencies
